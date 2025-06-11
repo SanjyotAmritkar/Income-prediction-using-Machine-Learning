@@ -1,0 +1,139 @@
+---
+title: "Preprocessing"
+author: "Tamali Halder"
+date: "2025-04-20"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+# Load necessary libraries
+library(dplyr)
+library(caret)
+library(smotefamily)
+
+# Read the datasets
+train <- read.csv("C:\\Users\\abhanage\\OneDrive - Stony Brook University\\2_Spring 2025 Sem 2\\AMS 580- Statistical Learning\\1. Project\\train.csv", stringsAsFactors = FALSE)
+test <- read.csv("C:\\Users\\abhanage\\OneDrive - Stony Brook University\\2_Spring 2025 Sem 2\\AMS 580- Statistical Learning\\1. Project\\test.csv", stringsAsFactors = FALSE)
+
+# Combine datasets for consistent preprocessing
+train$data_type <- 'train'
+test$data_type <- 'test'
+full_data <- rbind(train, test)
+
+# Replace "?" with NA
+full_data[full_data == "?"] <- NA
+
+# Function to calculate mode
+get_mode <- function(v) {
+  uniqv <- unique(v[!is.na(v)])
+  uniqv[which.max(tabulate(match(v, uniqv)))]
+}
+
+# Check missing percentage due to "?"
+missing_percent <- sapply(full_data, function(x) mean(is.na(x)) * 100)
+
+# Handle NA values (originally "?")
+for (col in names(full_data)) {
+  if (any(is.na(full_data[[col]]))) {
+    miss_pct <- mean(is.na(full_data[[col]])) * 100
+    if (miss_pct <= 5) {
+      full_data <- full_data[!is.na(full_data[[col]]), ]
+    } else {
+      if (is.character(full_data[[col]])) {
+        mode_val <- get_mode(full_data[[col]])
+        full_data[[col]][is.na(full_data[[col]])] <- mode_val
+      }
+    }
+  }
+}
+
+(missing_percent)
+
+```
+
+```{r}
+
+# Convert categorical variables to factors
+cat_cols <- sapply(full_data, is.character)
+full_data[cat_cols] <- lapply(full_data[cat_cols], as.factor)
+
+# Dummy encode (excluding target "income")
+dummies <- dummyVars("~ .", data = full_data[, !names(full_data) %in% c("income")])
+full_data_encoded <- data.frame(predict(dummies, newdata = full_data))
+
+# Re-attach target variable
+full_data_encoded$income <- full_data$income
+
+# Split back to train/test
+train_processed <- full_data_encoded[full_data$data_type == "train", ]
+test_processed <- full_data_encoded[full_data$data_type == "test", ]
+
+# Drop helper column
+train_processed$data_type <- NULL
+test_processed$data_type <- NULL
+
+# Scale numeric columns
+num_cols <- sapply(train_processed, is.numeric)
+preproc <- preProcess(train_processed[, num_cols], method = c("center", "scale"))
+train_processed[, num_cols] <- predict(preproc, train_processed[, num_cols])
+test_processed[, num_cols] <- predict(preproc, test_processed[, num_cols])
+
+# ======== APPLY SMOTE =========
+
+# Convert income to binary: 1 for >50K, 0 for <=50K
+train_processed$income <- ifelse(train_processed$income == ">50K", 1, 0)
+
+# Check class distribution
+table(train_processed$income)
+
+# Separate features and labels
+X <- train_processed[, !names(train_processed) %in% "income"]
+y <- train_processed$income
+
+# Remove constant columns
+nzv <- nearZeroVar(X, saveMetrics = TRUE)
+X <- X[, !nzv$zeroVar]
+
+# Combine back for duplication check
+train_combo <- cbind(X, income = y)
+
+# Remove duplicate rows
+train_combo <- train_combo[!duplicated(train_combo), ]
+
+# Separate again
+X <- train_combo[, !names(train_combo) %in% "income"]
+y <- train_combo$income
+
+# Check if minority class has enough unique rows
+minority_class_rows <- train_combo[train_combo$income == 1, ]
+if (nrow(unique(minority_class_rows)) > 6) {
+  # Apply SMOTE
+  smote_result <- SMOTE(X = X, target = y, K = 5)
+
+  # Combine result
+  train_balanced <- smote_result$data
+  train_balanced$income <- as.factor(train_balanced$class)
+  train_balanced$class <- NULL
+
+  # Check distribution
+  print(table(train_balanced$income))
+  print(prop.table(table(train_balanced$income)) * 100)
+} else {
+  message("Too few unique minority class rows. SMOTE skipped to avoid runif error.")
+  train_balanced <- train_combo
+  train_balanced$income <- as.factor(train_balanced$income)
+}
+
+
+
+# Save final datasets
+write.csv(train_balanced, "C:\\Users\\abhanage\\OneDrive - Stony Brook University\\2_Spring 2025 Sem 2\\AMS 580- Statistical Learning\\1. Project\\train_balanced.csv", row.names = FALSE)
+write.csv(test_processed, "C:\\Users\\abhanage\\OneDrive - Stony Brook University\\2_Spring 2025 Sem 2\\AMS 580- Statistical Learning\\1. Project\\test_preprocessed.csv", row.names = FALSE)
+
+
+
+```
